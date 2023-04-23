@@ -7,7 +7,6 @@ const { verifyAccessToken } = require('homegames-common');
 
 const AWS_ROUTE_53_HOSTED_ZONE_ID = process.env.AWS_ROUTE_53_HOSTED_ZONE_ID;
 
-
 const getUserHash = (username) => {
     console.log('getting user hash for user ' + username);
     if (!username) {
@@ -224,7 +223,7 @@ const createRequestRecord = (userId, requestId) => new Promise((resolve, reject)
 });
 
 
-const generateCert = (key) => new Promise((resolve, reject) => {
+const generateCert = (userId, requestId, key) => new Promise((resolve, reject) => {
         createRequestRecord(userId, requestId).then(() => {
             const client = new acme.Client({
                 directoryUrl: acme.directory.letsencrypt.staging,//production,//.staging
@@ -250,7 +249,7 @@ const generateCert = (key) => new Promise((resolve, reject) => {
                 client.auto(autoOpts).then(certificate => {
                     console.log('certificate!');
                     console.log(certificate);
-                    updateRequestRecord(userId, requestId, certificate);
+                    updateRequestRecord(userId, requestId, certificate).then(resolve);
                 }).catch(err => {
                     console.error('error creating certificate');
                     console.error(err);
@@ -270,7 +269,7 @@ exports.handler = async(event) => {
     let body = '';
 
     if (event && event.key) {
-        body = await generateCert(event.key);
+        body = await generateCert(event.userId, event.requestId, event.key);
     }
 
     const response = {

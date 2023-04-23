@@ -235,7 +235,7 @@ const requestCert = (userId) => new Promise((resolve, reject) => {
 
         lambda.invoke({
             FunctionName: 'cert-doer',
-            Payload: JSON.stringify({'ayy': 'lmao'})
+            Payload: JSON.stringify({key, userId, requestId})
         }, (err, data) => {
             console.log("ERROR AND DATA");
             console.log(err);
