@@ -227,19 +227,21 @@ const requestCert = (userId) => new Promise((resolve, reject) => {
     console.log('need to do the thing');
     acme.crypto.createPrivateKey().then(key => {
         const requestId = generateId();
-        resolve({requestId, key: key.toString()});
 
         const lambda = new aws.Lambda({
             region: 'us-west-2'
         });
 
+        console.log('about to invoke');
         lambda.invoke({
             FunctionName: 'cert-doer',
-            Payload: JSON.stringify({key, userId, requestId})
+            Payload: JSON.stringify({key, userId, requestId}),
+            InvocationType: 'Event'
         }, (err, data) => {
             console.log("ERROR AND DATA");
             console.log(err);
             console.log(data);
+            resolve({requestId, key: key.toString()});
         });
 
 //        createRequestRecord(userId, requestId).then(() => {
@@ -282,26 +284,50 @@ const requestCert = (userId) => new Promise((resolve, reject) => {
 });
 
 exports.handler = async(event) => {
-    console.log('event');
+    console.log('event what the hell');
     console.log(event);
 
-    const authToken = event && event.token;
-    const username = event && event.username;
-
-    let body = '';
-    if (!authToken || !username) {
-        body = 'Requires username and auth token';
+    if (event.httpMethod === 'GET') {
+        if (event.path === '/cert_status') {
+            return {
+                statusCode: 200,
+                body: 'ayy lmao cert status'
+            }
+ 
+        } 
+        return {
+            statusCode: 200,
+            body: 'ayy lmao'
+        }
     } else {
-        const userId = await authenticate(username, authToken);
-        body = JSON.stringify(await requestCert(username));
+
+        const authToken = event && event.headers['hg-token'];
+        const username = event && event.headers['hg-username'];
+
+        let body = '';
+        if (!authToken || !username) {
+            body = 'Requires username and auth token';
+        } else {
+            const userId = await authenticate(username, authToken);
+            if (event.path === '/update_dns') {
+                const sourceIp = event.requestContext.identity && event.requestContext.identity.sourceIp;
+                if (sourceIp) {
+                    // todo: support multiple instances 
+                    await createDnsRecord(getUserHash(userId) + '.homegames.link', sourceIp);
+                    body = 'updated dns record to ' + sourceIp;
+                }
+            } else {
+                body = JSON.stringify(await requestCert(username));
+            }
+        }
+
+        const response = {
+            statusCode: 200,
+            body
+        };
+
+        return response;
     }
-
-    const response = {
-        statusCode: 200,
-        body
-    };
-
-    return response;
 };
 
 //requestCert('123').then(res => {

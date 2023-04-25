@@ -3,17 +3,9 @@ const crypto = require('crypto');
 const aws = require('aws-sdk');
 const process = require('process');
 const { v4: uuidv4 } = require('uuid');
-const { verifyAccessToken } = require('homegames-common');
+const { verifyAccessToken, getUserHash } = require('homegames-common');
 
 const AWS_ROUTE_53_HOSTED_ZONE_ID = process.env.AWS_ROUTE_53_HOSTED_ZONE_ID;
-
-const getUserHash = (username) => {
-    console.log('getting user hash for user ' + username);
-    if (!username) {
-        reject('missing username');
-    }
-    return crypto.createHash('md5').update(username).digest('hex');
-};
 
 // lol i should delete this
 const authenticate = (username, token) => new Promise((resolve, reject) => {
@@ -222,21 +214,51 @@ const createRequestRecord = (userId, requestId) => new Promise((resolve, reject)
     });
 });
 
+const getExistingCertRequests = (userId) => new Promise((resolve, reject) => {
+    const readClient = new aws.DynamoDB.DocumentClient({
+        region: 'us-west-2'
+    });
+
+    const params = {
+        TableName: 'cert_requests',
+        ScanIndexForward: false,
+        KeyConditionExpression: '#developer_id = :developer_id',
+        ExpressionAttributeNames: {
+            '#developer_id': 'developer_id',
+        },
+        ExpressionAttributeValues: {
+            ':developer_id': userId
+        }
+    };
+
+    readClient.query(params, (err, results) => {
+        if (err) {
+            console.log(err);
+            reject(err.toString());
+        } else {
+            resolve(results.Items);
+        }
+    });
+ 
+});
 
 const generateCert = (userId, requestId, key) => new Promise((resolve, reject) => {
+    getExistingCertRequests(userId).then(certRequests => {
+        console.log('existing cert requests ? ');
+        console.log(certRequests);
         createRequestRecord(userId, requestId).then(() => {
+            console.log('creating one in prod really');
             const client = new acme.Client({
-                directoryUrl: acme.directory.letsencrypt.staging,//production,//.staging
+                directoryUrl: acme.directory.letsencrypt.production,//staging,//production,//.staging
                 accountKey: key
             });
 
             acme.crypto.createCsr({
-                commonName: 'picodeg.io'//,
-            //          altNames: ['picodeg.io']
+                commonName: getUserHash(userId) + '.homegames.link'//,
             }).then(([certKey, certCsr]) => {
                 console.log('did this');
-                console.log(certKey);
-                console.log(certCsr);
+                console.log(certKey.toString());
+                console.log(certCsr.toString());
                 const autoOpts = {
             	    csr: certCsr,
             	    email: 'joseph@homegames.io',
@@ -260,13 +282,14 @@ const generateCert = (userId, requestId, key) => new Promise((resolve, reject) =
                 reject(err);
             });
         });
+    });
  
 });
 exports.handler = async(event) => {
     console.log('event');
     console.log(event);
     
-    let body = '';
+    let body = 'what the heck';
 
     if (event && event.key) {
         body = await generateCert(event.userId, event.requestId, event.key);
