@@ -242,7 +242,7 @@ const getExistingCertRequests = (userId) => new Promise((resolve, reject) => {
  
 });
 
-const generateCert = (userId, requestId, key) => new Promise((resolve, reject) => {
+const generateCert = (userId, requestId, key, csr) => new Promise((resolve, reject) => {
     getExistingCertRequests(userId).then(certRequests => {
         console.log('existing cert requests ? ');
         console.log(certRequests);
@@ -253,14 +253,12 @@ const generateCert = (userId, requestId, key) => new Promise((resolve, reject) =
                 accountKey: key
             });
 
-            acme.crypto.createCsr({
-                commonName: getUserHash(userId) + '.homegames.link'//,
-            }).then(([certKey, certCsr]) => {
-                console.log('did this');
-                console.log(certKey.toString());
-                console.log(certCsr.toString());
+//            acme.crypto.createCsr({
+//                commonName: getUserHash(userId) + '.homegames.link'//,
+//            }).then(([certKey, certCsr]) => {
+                console.log('did this !!');
                 const autoOpts = {
-            	    csr: certCsr,
+            	    csr,
             	    email: 'joseph@homegames.io',
             	    termsOfServiceAgreed: true,
                         challengeCreateFn,//: async (authz, challenge, keyAuthorization) => {},
@@ -276,11 +274,11 @@ const generateCert = (userId, requestId, key) => new Promise((resolve, reject) =
                     console.error('error creating certificate');
                     console.error(err);
                 });
-            }).catch(err => {
-                console.error('error creating csr');
-                console.error(err);
-                reject(err);
-            });
+ //           }).catch(err => {
+   //             console.error('error creating csr');
+     //           console.error(err);
+       //         reject(err);
+         //   });
         });
     });
  
@@ -292,7 +290,7 @@ exports.handler = async(event) => {
     let body = 'what the heck';
 
     if (event && event.key) {
-        body = await generateCert(event.userId, event.requestId, event.key);
+        body = await generateCert(event.userId, event.requestId, event.key, event.csr);
     }
 
     const response = {

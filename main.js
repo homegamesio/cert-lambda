@@ -3,18 +3,9 @@ const crypto = require('crypto');
 const aws = require('aws-sdk');
 const process = require('process');
 const { v4: uuidv4 } = require('uuid');
-const { verifyAccessToken } = require('homegames-common');
+const { verifyAccessToken, getUserHash } = require('homegames-common');
 
 const AWS_ROUTE_53_HOSTED_ZONE_ID = process.env.AWS_ROUTE_53_HOSTED_ZONE_ID;
-
-
-const getUserHash = (username) => {
-    console.log('getting user hash for user ' + username);
-    if (!username) {
-        reject('missing username');
-    }
-    return crypto.createHash('md5').update(username).digest('hex');
-};
 
 // lol i should delete this
 const authenticate = (username, token) => new Promise((resolve, reject) => {
@@ -345,21 +336,24 @@ const requestCert = (userId) => new Promise((resolve, reject) => {
     console.log('need to do the thing');
     acme.crypto.createPrivateKey().then(key => {
         const requestId = generateId();
+        acme.crypto.createCsr({
+            commonName: getUserHash(userId) + '.homegames.link'//,
+        }).then(([certKey, certCsr]) => {
+            const lambda = new aws.Lambda({
+                region: 'us-west-2'
+            });
 
-        const lambda = new aws.Lambda({
-            region: 'us-west-2'
-        });
-
-        console.log('about to invoke');
-        lambda.invoke({
-            FunctionName: 'cert-doer',
-            Payload: JSON.stringify({key, userId, requestId}),
-            InvocationType: 'Event'
-        }, (err, data) => {
-            console.log("ERROR AND DATA");
-            console.log(err);
-            console.log(data);
-            resolve({requestId, key: key.toString()});
+            console.log('about to invoke');
+            lambda.invoke({
+                FunctionName: 'cert-doer',
+                Payload: JSON.stringify({csr: certCsr, key, userId, requestId}),
+                InvocationType: 'Event'
+            }, (err, data) => {
+                console.log("ERROR AND DATA");
+                console.log(err);
+                console.log(data);
+                resolve({requestId, key: certKey.toString()});
+            });
         });
 
 //        createRequestRecord(userId, requestId).then(() => {
