@@ -21,6 +21,33 @@ const authenticate = (username, token) => new Promise((resolve, reject) => {
 	verifyAccessToken(username, token).then(resolve).catch(reject);
 });
 
+const getLinkRecord = (name) => new Promise((resolve, reject) => {
+    const params = {
+        HostedZoneId: AWS_ROUTE_53_HOSTED_ZONE_ID,
+        StartRecordName: name,
+        StartRecordType: 'A'
+    };
+
+    const route53 = new aws.Route53();
+    route53.listResourceRecordSets(params, (err, data) => {
+        if (err) {
+            console.error('error listing record sets');
+            console.error(err);
+            reject();
+        } else {
+            for (const i in data.ResourceRecordSets) {
+                const entry = data.ResourceRecordSets[i];
+                if (entry.Name === name + '.') {
+                    resolve(entry.ResourceRecords[0].Value);
+                }
+            }
+            reject();
+        }
+    });
+
+});
+
+
 const getDnsRecord = (name) => new Promise((resolve, reject) => {
     const params = {
         HostedZoneId: AWS_ROUTE_53_HOSTED_ZONE_ID,
@@ -96,6 +123,97 @@ const deleteDnsRecord = (name) => new Promise((resolve, reject) => {
     });
 
 });
+
+const updateLinkRecord = (name, value) => new Promise((resolve, reject) => {
+    getLinkRecord(name).then(() => {
+        changeLinkRecord(name, value).then(resolve); 
+    }).catch(err => {
+        const dnsParams = {
+            ChangeBatch: {
+                Changes: [
+                    {
+                        Action: 'CREATE',
+                        ResourceRecordSet: {
+                            Name: name,
+                            ResourceRecords: [
+                                {
+                                    Value: value
+                                }
+                            ],
+                            TTL: 60,
+                            Type: 'A'
+                        }
+                    }
+                ]
+            },
+            HostedZoneId: AWS_ROUTE_53_HOSTED_ZONE_ID
+        };
+        
+        console.log('dns params');
+        console.log(dnsParams);
+
+        const route53 = new aws.Route53();
+        route53.changeResourceRecordSets(dnsParams, (err, data) => {
+            if (err) {
+                reject(err);
+            } else {
+                const params = {
+                    Id: data.ChangeInfo.Id
+                };
+
+                route53.waitFor('resourceRecordSetsChanged', params, (err, data) => {
+                    if (data.ChangeInfo.Status === 'INSYNC') {
+                        resolve();
+                    }
+                });
+            }
+        });
+    });
+
+});
+
+const changeLinkRecord = (name, value) => new Promise((resolve, reject) => {
+    const dnsParams = {
+        ChangeBatch: {
+            Changes: [
+                {
+                    Action: 'UPSERT',
+                    ResourceRecordSet: {
+                        Name: name,
+                        ResourceRecords: [
+                            {
+                                Value: value
+                            }
+                        ],
+                        TTL: 60,
+                        Type: 'A'
+                    }
+                }
+            ]
+        },
+        HostedZoneId: AWS_ROUTE_53_HOSTED_ZONE_ID
+    };
+
+    const route53 = new aws.Route53();
+    route53.changeResourceRecordSets(dnsParams, (err, data) => {
+        if (err) {
+            reject(err);
+        } else {
+            const params = {
+                Id: data.ChangeInfo.Id
+            };
+
+            route53.waitFor('resourceRecordSetsChanged', params, (err, data) => {
+                if (data.ChangeInfo.Status === 'INSYNC') {
+                    resolve();
+                }
+            });
+        }
+    });
+
+});
+
+
 
 const createDnsRecord = (name, value) => new Promise((resolve, reject) => {
     const dnsParams = {
@@ -310,10 +428,14 @@ exports.handler = async(event) => {
         } else {
             const userId = await authenticate(username, authToken);
             if (event.path === '/update_dns') {
-                const sourceIp = event.requestContext.identity && event.requestContext.identity.sourceIp;
+                const reqBody = event.body ? JSON.parse(event.body) : null;
+                const sourceIp = reqBody && reqBody.ip;
+                //const sourceIp = event.requestContext.identity && event.requestContext.identity.sourceIp;
+
                 if (sourceIp) {
                     // todo: support multiple instances 
-                    await createDnsRecord(getUserHash(userId) + '.homegames.link', sourceIp);
+                    console.log('updating with source ip ' + sourceIp);
+                    await updateLinkRecord(getUserHash(username) + '.homegames.link', sourceIp);
                     body = 'updated dns record to ' + sourceIp;
                 }
             } else {
