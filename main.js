@@ -332,12 +332,12 @@ const createRequestRecord = (userId, requestId) => new Promise((resolve, reject)
     });
 });
 
-const requestCert = (userId) => new Promise((resolve, reject) => {
+const requestCert = (userId, localServerIp) => new Promise((resolve, reject) => {
     console.log('need to do the thing');
     acme.crypto.createPrivateKey().then(key => {
         const requestId = generateId();
         acme.crypto.createCsr({
-            commonName: getUserHash(userId) + '.homegames.link'//,
+            commonName: getUserHash(userId + localServerIp) + '.homegames.link'//,
         }).then(([certKey, certCsr]) => {
             const lambda = new aws.Lambda({
                 region: 'us-west-2'
@@ -346,7 +346,7 @@ const requestCert = (userId) => new Promise((resolve, reject) => {
             console.log('about to invoke');
             lambda.invoke({
                 FunctionName: 'cert-doer',
-                Payload: JSON.stringify({csr: certCsr, key, userId, requestId}),
+                Payload: JSON.stringify({csr: certCsr, key, userId, requestId,localServerIp}),
                 InvocationType: 'Event'
             }, (err, data) => {
                 console.log("ERROR AND DATA");
@@ -395,21 +395,72 @@ const requestCert = (userId) => new Promise((resolve, reject) => {
     });
 });
 
+const getCertStatus = (username, ip) => new Promise((resolve, reject) => {
+    console.log('cert status for username ' + username + ', ' + ip);
+    getExistingCertRequests(username).then((requests) => {
+        console.log("HERE ARE REQS");
+        console.log(requests);
+        resolve();
+    });
+});
+
+const getExistingCertRequests = (userId) => new Promise((resolve, reject) => {
+    const readClient = new aws.DynamoDB.DocumentClient({
+        region: 'us-west-2'
+    });
+
+    const params = {
+        TableName: 'cert_requests',
+        ScanIndexForward: false,
+        KeyConditionExpression: '#developer_id = :developer_id',
+        ExpressionAttributeNames: {
+            '#developer_id': 'developer_id',
+        },
+        ExpressionAttributeValues: {
+            ':developer_id': userId
+        }
+    };
+
+    readClient.query(params, (err, results) => {
+        if (err) {
+            console.log(err);
+            reject(err.toString());
+        } else {
+            resolve(results.Items);
+        }
+    });
+ 
+});
+
 exports.handler = async(event) => {
     console.log('event what the hell');
     console.log(event);
 
-    if (event.httpMethod === 'GET') {
-        if (event.path === '/cert_status') {
-            return {
-                statusCode: 200,
-                body: 'ayy lmao cert status'
-            }
+    if (event.httpMethod === 'POST' && event.path === '/cert_status') {
+        const authToken = event && event.headers['hg-token'];
+        const username = event && event.headers['hg-username'];
+
+        let body = '';
+        if (!authToken || !username) {
+            body = 'Requires username and auth token';
+        } else {
+            const userId = await authenticate(username, authToken);
+
+            const reqBody = event.body ? JSON.parse(event.body) : null;
+            const localServerIp = reqBody && reqBody.localServerIp;
  
-        } 
+            if (!localServerIp) {
+                return {
+                    statusCode: 400,
+                    body: 'Missing localServerIp for cert status'
+                }
+            }
+            console.log("AYYYYYY SERVER LOCAL UOP " + event.localServerIp);
+            const certStatus = await getCertStatus(username, event.localServerIp);
+        }
         return {
             statusCode: 200,
-            body: 'ayy lmao'
+            body: 'ayy lmao cert status'
         }
     } else {
 
@@ -433,7 +484,18 @@ exports.handler = async(event) => {
                     body = 'updated dns record to ' + sourceIp;
                 }
             } else {
-                body = JSON.stringify(await requestCert(username));
+
+                const reqBody = event.body ? JSON.parse(event.body) : null;
+                const localServerIp = reqBody && reqBody.localServerIp;
+ 
+                if (!localServerIp) {
+                    return {
+                        statusCode: 400,
+                        body: 'Missing localServerIp for cert'
+                    }
+                }
+ 
+                body = JSON.stringify(await requestCert(username, localServerIp));
             }
         }
 

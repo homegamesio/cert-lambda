@@ -186,7 +186,7 @@ const updateRequestRecord = (userId, requestId, certificate) => new Promise((res
     });
 });
 
-const createRequestRecord = (userId, requestId) => new Promise((resolve, reject) => {
+const createRequestRecord = (userId, localServerIp, requestId) => new Promise((resolve, reject) => {
     const client = new aws.DynamoDB({
         region: 'us-west-2'
     });
@@ -201,6 +201,9 @@ const createRequestRecord = (userId, requestId) => new Promise((resolve, reject)
             },
             'date_created': {
                 N: Date.now() + ''
+            },
+            'local_server_ip': {
+                S: localServerIp
             }
         }
     };
@@ -242,11 +245,11 @@ const getExistingCertRequests = (userId) => new Promise((resolve, reject) => {
  
 });
 
-const generateCert = (userId, requestId, key, csr) => new Promise((resolve, reject) => {
+const generateCert = (userId, requestId, key, csr, localServerIp) => new Promise((resolve, reject) => {
     getExistingCertRequests(userId).then(certRequests => {
         console.log('existing cert requests ? ');
         console.log(certRequests);
-        createRequestRecord(userId, requestId).then(() => {
+        createRequestRecord(userId, localServerIp, requestId).then(() => {
             console.log('creating one in prod really');
             const client = new acme.Client({
                 directoryUrl: acme.directory.letsencrypt.production,//staging,//production,//.staging
@@ -290,7 +293,7 @@ exports.handler = async(event) => {
     let body = 'what the heck';
 
     if (event && event.key) {
-        body = await generateCert(event.userId, event.requestId, event.key, event.csr);
+        body = await generateCert(event.userId, event.requestId, event.key, event.csr,event.localServerIp);
     }
 
     const response = {
