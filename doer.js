@@ -150,19 +150,19 @@ const getHash = (input) => {
 
 const generateId = () => getHash(uuidv4());
 
-const updateRequestRecord = (userId, requestId, certificate) => new Promise((resolve, reject) => {
+const updateRequestRecord = (userId, requestId, localServerIp, certificate) => new Promise((resolve, reject) => {
     const ddb = new aws.DynamoDB({
         region: 'us-west-2'
     });
 
     const updateParams = {
-        TableName: 'cert_requests',
+        TableName: 'hg_certs',
         Key: {
             'developer_id': {
                 S: userId
             },
-            'request_id': {
-                S: requestId 
+            'ip_address': {
+                S: localServerIp 
             }
         },
         AttributeUpdates: {
@@ -191,7 +191,7 @@ const createRequestRecord = (userId, localServerIp, requestId) => new Promise((r
         region: 'us-west-2'
     });
     const params = {
-        TableName: 'cert_requests',
+        TableName: 'hg_certs',
         Item: {
             'developer_id': {
                 S: userId 
@@ -199,10 +199,13 @@ const createRequestRecord = (userId, localServerIp, requestId) => new Promise((r
             'request_id': {
                 S: requestId
             },
+            'ip_address': {
+                S: localServerIp
+            },
             'date_created': {
                 N: Date.now() + ''
             },
-            'local_server_ip': {
+            'ip_address': {
                 S: localServerIp
             }
         }
@@ -223,7 +226,7 @@ const getExistingCertRequests = (userId) => new Promise((resolve, reject) => {
     });
 
     const params = {
-        TableName: 'cert_requests',
+        TableName: 'hg_certs',
         ScanIndexForward: false,
         KeyConditionExpression: '#developer_id = :developer_id',
         ExpressionAttributeNames: {
@@ -252,7 +255,7 @@ const generateCert = (userId, requestId, key, csr, localServerIp) => new Promise
         createRequestRecord(userId, localServerIp, requestId).then(() => {
             console.log('creating one in prod really');
             const client = new acme.Client({
-                directoryUrl: acme.directory.letsencrypt.production,//staging,//production,//.staging
+                directoryUrl: acme.directory.letsencrypt.staging,//production,//.staging
                 accountKey: key
             });
 
@@ -272,7 +275,7 @@ const generateCert = (userId, requestId, key, csr, localServerIp) => new Promise
                 client.auto(autoOpts).then(certificate => {
                     console.log('certificate!');
                     console.log(certificate);
-                    updateRequestRecord(userId, requestId, certificate).then(resolve);
+                    updateRequestRecord(userId, requestId, localServerIp, certificate).then(resolve);
                 }).catch(err => {
                     console.error('error creating certificate');
                     console.error(err);

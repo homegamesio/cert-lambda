@@ -1,4 +1,5 @@
 const acme = require('acme-client');
+const archiver = require('archiver');
 const crypto = require('crypto');
 const aws = require('aws-sdk');
 const process = require('process');
@@ -274,7 +275,7 @@ const updateRequestRecord = (userId, requestId, certificate) => new Promise((res
     });
 
     const updateParams = {
-        TableName: 'cert_requests',
+        TableName: 'hg_certs',
         Key: {
             'developer_id': {
                 S: userId
@@ -309,7 +310,7 @@ const createRequestRecord = (userId, requestId) => new Promise((resolve, reject)
         region: 'us-west-2'
     });
     const params = {
-        TableName: 'cert_requests',
+        TableName: 'hg_certs',
         Item: {
             'developer_id': {
                 S: userId 
@@ -332,8 +333,29 @@ const createRequestRecord = (userId, requestId) => new Promise((resolve, reject)
     });
 });
 
-const requestCert = (userId, localServerIp) => new Promise((resolve, reject) => {
+const getCertZip = (certData) => new Promise((resolve, reject) => {
+    const archive = archiver('zip', {
+        zlib: { level: 9 } // Sets the compression level.
+    });
+    
+    const bufs = [];
+    archive.on('data', (buf) => {
+        bufs.push(buf);
+    });
+
+    archive.on('end', () => {
+        const totalBuf = Buffer.from(Buffer.concat(bufs));
+        resolve(totalBuf.toString('base64'));
+    });
+
+    archive.append(certData.key, { name: 'hg-certs/homegames.key' });
+
+    archive.finalize();
+});
+
+const requestCert = (userId, authToken, localServerIp) => new Promise((resolve, reject) => {
     console.log('need to do the thing');
+    getCertInfo(userId, authToken).then(certInfo => {
     acme.crypto.createPrivateKey().then(key => {
         const requestId = generateId();
         acme.crypto.createCsr({
@@ -395,12 +417,95 @@ const requestCert = (userId, localServerIp) => new Promise((resolve, reject) => 
     });
 });
 
+const certExists = (username, ip) => new Promise((resolve, reject) => {
+    const ddb = new aws.DynamoDB({
+        region: 'us-west-2'
+    });
+
+    const certParams = {
+        TableName: 'hg_certs',
+        Key: {
+            'developer_id': {
+                S: username
+            },
+            'ip_address': {
+                S: ip
+            }
+        }
+    };
+
+    ddb.getItem(certParams, (err, data) => {
+        if (err) {
+            console.log('error getting that');
+            console.log(err);
+            reject();
+        } else {
+            console.log('here is dataaa');
+            console.log(data);
+            resolve(!!data.Item);
+        }
+    });
+
+});
+
+const getCert = (username, ip) => new Promise((resolve, reject) => {
+    const ddb = new aws.DynamoDB({
+        region: 'us-west-2'
+    });
+
+    const certParams = {
+        TableName: 'hg_certs',
+        Key: {
+            'developer_id': {
+                S: username
+            },
+            'ip_address': {
+                S: ip
+            }
+        }
+    };
+
+    ddb.getItem(certParams, (err, data) => {
+        if (err) {
+            console.log('error getting that');
+            console.log(err);
+            reject();
+        } else {
+            if (data.Item.certificate) {
+                resolve(Buffer.from(data.Item.certificate.S).toString('base64'));
+            } else {
+                resolve(null);
+            }
+        }
+    });
+
+
+});
+
+const getCertExpiration = (certData) => new Promise((resolve, reject) => {
+    resolve('todo!');
+});
+
 const getCertStatus = (username, ip) => new Promise((resolve, reject) => {
-    console.log('cert status for username ' + username + ', ' + ip);
-    getExistingCertRequests(username).then((requests) => {
-        console.log("HERE ARE REQS");
-        console.log(requests);
-        resolve();
+    let body = {
+        certFound: false,
+        certExpiration: null,
+        certIp: ip
+    };
+
+    certExists(username, ip).then((exists) => {
+        if (exists) {
+            body.certFound = true;
+            getCert(username, ip).then(certData => {
+                body.certData = certData;
+                getCertExpiration(certData).then(certExpiration => {
+                    body.certExpiration = certExpiration;
+                    resolve(body);
+                });
+            });
+        } else {
+            resolve(body);
+        }
     });
 });
 
@@ -410,7 +515,7 @@ const getExistingCertRequests = (userId) => new Promise((resolve, reject) => {
     });
 
     const params = {
-        TableName: 'cert_requests',
+        TableName: 'hg_certs',
         ScanIndexForward: false,
         KeyConditionExpression: '#developer_id = :developer_id',
         ExpressionAttributeNames: {
@@ -444,7 +549,15 @@ exports.handler = async(event) => {
         if (!authToken || !username) {
             body = 'Requires username and auth token';
         } else {
-            const userId = await authenticate(username, authToken);
+            let userId;
+            try {
+                userId = await authenticate(username, authToken);
+            } catch (err) { 
+                return {
+                    statusCode: 400,
+                    body: 'Bad auth token'
+                }
+            }
 
             const reqBody = event.body ? JSON.parse(event.body) : null;
             const localServerIp = reqBody && reqBody.localServerIp;
@@ -456,11 +569,11 @@ exports.handler = async(event) => {
                 }
             }
             console.log("AYYYYYY SERVER LOCAL UOP " + event.localServerIp);
-            const certStatus = await getCertStatus(username, event.localServerIp);
+            body = await getCertStatus(username, localServerIp);
         }
         return {
             statusCode: 200,
-            body: 'ayy lmao cert status'
+            body: JSON.stringify(body)
         }
     } else {
 
@@ -475,7 +588,6 @@ exports.handler = async(event) => {
             if (event.path === '/update_dns') {
                 const reqBody = event.body ? JSON.parse(event.body) : null;
                 const sourceIp = reqBody && reqBody.ip;
-                //const sourceIp = event.requestContext.identity && event.requestContext.identity.sourceIp;
 
                 if (sourceIp) {
                     // todo: support multiple instances 
@@ -495,7 +607,17 @@ exports.handler = async(event) => {
                     }
                 }
  
-                body = JSON.stringify(await requestCert(username, localServerIp));
+                const certData = await requestCert(username, authToken, localServerIp);
+
+                body = await getCertZip(certData);
+
+                return {
+                    statusCode: 200,
+                    isBase64Encoded: true,
+                    body
+                };
+
+//                body = JSON.stringify();
             }
         }
 
