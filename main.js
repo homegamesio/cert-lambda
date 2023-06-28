@@ -5,6 +5,8 @@ const aws = require('aws-sdk');
 const process = require('process');
 const { v4: uuidv4 } = require('uuid');
 const { verifyAccessToken, getUserHash } = require('homegames-common');
+const { X509Certificate } = require('crypto');
+
 
 const AWS_ROUTE_53_HOSTED_ZONE_ID = process.env.AWS_ROUTE_53_HOSTED_ZONE_ID;
 
@@ -13,7 +15,7 @@ const authenticate = (username, token) => new Promise((resolve, reject) => {
 	verifyAccessToken(username, token).then(resolve).catch(reject);
 });
 
-const getLinkRecord = (name) => new Promise((resolve, reject) => {
+const getLinkRecord = (name, throwOnEmpty) => new Promise((resolve, reject) => {
     const params = {
         HostedZoneId: AWS_ROUTE_53_HOSTED_ZONE_ID,
         StartRecordName: name,
@@ -25,7 +27,7 @@ const getLinkRecord = (name) => new Promise((resolve, reject) => {
         if (err) {
             console.error('error listing record sets');
             console.error(err);
-            reject();
+            reject(err);
         } else {
             for (const i in data.ResourceRecordSets) {
                 const entry = data.ResourceRecordSets[i];
@@ -33,7 +35,7 @@ const getLinkRecord = (name) => new Promise((resolve, reject) => {
                     resolve(entry.ResourceRecords[0].Value);
                 }
             }
-            reject();
+            throwOnEmpty ? reject() : resolve(null);
         }
     });
 
@@ -117,7 +119,7 @@ const deleteDnsRecord = (name) => new Promise((resolve, reject) => {
 });
 
 const updateLinkRecord = (name, value) => new Promise((resolve, reject) => {
-    getLinkRecord(name).then(() => {
+    getLinkRecord(name, true).then(() => {
         changeLinkRecord(name, value).then(resolve); 
     }).catch(err => {
         const dnsParams = {
@@ -353,68 +355,50 @@ const getCertZip = (certData) => new Promise((resolve, reject) => {
     archive.finalize();
 });
 
-const requestCert = (userId, authToken, localServerIp) => new Promise((resolve, reject) => {
-    console.log('need to do the thing');
-    getCertInfo(userId, authToken).then(certInfo => {
-    acme.crypto.createPrivateKey().then(key => {
-        const requestId = generateId();
-        acme.crypto.createCsr({
-            commonName: getUserHash(userId + localServerIp) + '.homegames.link'//,
-        }).then(([certKey, certCsr]) => {
-            const lambda = new aws.Lambda({
-                region: 'us-west-2'
-            });
-
-            console.log('about to invoke');
-            lambda.invoke({
-                FunctionName: 'cert-doer',
-                Payload: JSON.stringify({csr: certCsr, key, userId, requestId,localServerIp}),
-                InvocationType: 'Event'
-            }, (err, data) => {
-                console.log("ERROR AND DATA");
-                console.log(err);
-                console.log(data);
-                resolve({requestId, key: certKey.toString()});
-            });
-        });
-
-//        createRequestRecord(userId, requestId).then(() => {
-//            const client = new acme.Client({
-//                directoryUrl: acme.directory.letsencrypt.staging,//production,//.staging
-//                accountKey: key
-//            });
-//
-//            acme.crypto.createCsr({
-//                commonName: 'picodeg.io'//,
-//            //          altNames: ['picodeg.io']
-//            }).then(([certKey, certCsr]) => {
-//                console.log('did this');
-//                console.log(certKey);
-//                console.log(certCsr);
-//                const autoOpts = {
-//            	    csr: certCsr,
-//            	    email: 'joseph@homegames.io',
-//            	    termsOfServiceAgreed: true,
-//                        challengeCreateFn,//: async (authz, challenge, keyAuthorization) => {},
-//                        challengeRemoveFn,//: async (authz, challenge, keyAuthorization) => {},
-//            	    challengePriority: ['dns-01']
-//                };
-//
-//                client.auto(autoOpts).then(certificate => {
-//                    console.log('certificate!');
-//                    console.log(certificate);
-//                    updateRequestRecord(userId, requestId, certificate);
-//                }).catch(err => {
-//                    console.error('error creating certificate');
-//                    console.error(err);
-//                });
-//            }).catch(err => {
-//                console.error('error creating csr');
-//                console.error(err);
-//                reject(err);
-//            });
-//        });
+const getDnsStatus = (userId, localServerIp) => new Promise((resolve, reject) => {
+    getLinkRecord(getUserHash(userId + localServerIp) + '.homegames.link').then(dnsRecord => {
+        resolve(dnsRecord);
+    }).catch(err => {
+        console.error('error getting dns record');
+        console.error(err);
     });
+});
+
+const requestCert = (userId, localServerIp) => new Promise((resolve, reject) => {
+    console.log('need to do the thing');
+    getCertStatus(userId, localServerIp).then(certInfo => {
+        console.log('dsfsdfdsfdsfsdf');
+        console.log(certInfo);
+//        getDnsStatus(userId, localServerIp).then(recordExists => {
+
+            if (certInfo.certData && certInfo.certExpiration && certInfo.certExpiration > Date.now()) {
+                reject('A valid cert has already been created for this IP (' + localServerIp + ').  If you do not have access to your private key, reach out to support@homegames.io to generate a new one');
+            } else {
+                acme.crypto.createPrivateKey().then(key => {
+                    const requestId = generateId();
+                    acme.crypto.createCsr({
+                        commonName: getUserHash(userId + localServerIp) + '.homegames.link'
+                    }).then(([certKey, certCsr]) => {
+                        const lambda = new aws.Lambda({
+                            region: 'us-west-2'
+                        });
+    
+                        console.log('about to invoke');
+                        lambda.invoke({
+                            FunctionName: 'cert-doer',
+                            Payload: JSON.stringify({csr: certCsr, key, userId, requestId, localServerIp}),
+                            InvocationType: 'Event'
+                        }, (err, data) => {
+                            console.log("ERROR AND DATA");
+                            console.log(err);
+                            console.log(data);
+                            resolve({requestId, key: certKey.toString()});
+                        });
+                    });
+                });
+            }
+        });
+    //});
 });
 
 const certExists = (username, ip) => new Promise((resolve, reject) => {
@@ -483,14 +467,22 @@ const getCert = (username, ip) => new Promise((resolve, reject) => {
 });
 
 const getCertExpiration = (certData) => new Promise((resolve, reject) => {
-    resolve('todo!');
+    const certString = Buffer.from(certData, 'base64').toString();
+    console.log('cert string!!');
+    console.log(certString);
+    const { validTo } = new X509Certificate(certString);
+    console.log("CERT OBJEFFE");
+    console.log(validTo);
+    resolve(new Date(validTo).getTime());
 });
 
 const getCertStatus = (username, ip) => new Promise((resolve, reject) => {
+    console.log('getting cert status ' + username + ' dafsdf ip ' + ip);
     let body = {
         certFound: false,
         certExpiration: null,
-        certIp: ip
+        certIp: ip,
+        dnsAlias: null
     };
 
     certExists(username, ip).then((exists) => {
@@ -500,7 +492,13 @@ const getCertStatus = (username, ip) => new Promise((resolve, reject) => {
                 body.certData = certData;
                 getCertExpiration(certData).then(certExpiration => {
                     body.certExpiration = certExpiration;
-                    resolve(body);
+                    getDnsStatus(username, ip).then(record => {
+                        body.dnsAlias = record && record === ip ? `${getUserHash(username + ip)}.homegames.link`: null;
+                        resolve(body);
+                    });
+                }).catch(err => {
+                    console.error('Error getting cert expiration info');
+                    console.error(err);
                 });
             });
         } else {
@@ -584,7 +582,16 @@ exports.handler = async(event) => {
         if (!authToken || !username) {
             body = 'Requires username and auth token';
         } else {
-            const userId = await authenticate(username, authToken);
+            let userId;
+            try {
+                userId = await authenticate(username, authToken);
+            } catch (err) { 
+                return {
+                    statusCode: 400,
+                    body: 'Bad auth token'
+                }
+            }
+
             if (event.path === '/update_dns') {
                 const reqBody = event.body ? JSON.parse(event.body) : null;
                 const sourceIp = reqBody && reqBody.ip;
@@ -592,7 +599,7 @@ exports.handler = async(event) => {
                 if (sourceIp) {
                     // todo: support multiple instances 
                     console.log('updating with source ip ' + sourceIp);
-                    await updateLinkRecord(getUserHash(username) + '.homegames.link', sourceIp);
+                    await updateLinkRecord(getUserHash(username + sourceIp) + '.homegames.link', sourceIp);
                     body = 'updated dns record to ' + sourceIp;
                 }
             } else {
@@ -607,7 +614,17 @@ exports.handler = async(event) => {
                     }
                 }
  
-                const certData = await requestCert(username, authToken, localServerIp);
+                let certData = '';
+                try {
+                    certData = await requestCert(username, localServerIp);
+                } catch (err) {
+                    console.error('Error requesting cert');
+                    console.error(err);
+                    return {
+                        statusCode: 500,
+                        body: err
+                    }
+                }
 
                 body = await getCertZip(certData);
 

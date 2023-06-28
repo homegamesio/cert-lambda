@@ -255,7 +255,7 @@ const generateCert = (userId, requestId, key, csr, localServerIp) => new Promise
         createRequestRecord(userId, localServerIp, requestId).then(() => {
             console.log('creating one in prod really');
             const client = new acme.Client({
-                directoryUrl: acme.directory.letsencrypt.staging,//production,//.staging
+                directoryUrl: acme.directory.letsencrypt.production,//production,//.staging
                 accountKey: key
             });
 
