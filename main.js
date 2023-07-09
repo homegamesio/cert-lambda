@@ -371,9 +371,9 @@ const requestCert = (publicIp) => new Promise((resolve, reject) => {
         console.log(certInfo);
 //        getDnsStatus(userId, localServerIp).then(recordExists => {
 
-            if (certInfo.certData && certInfo.certExpiration && certInfo.certExpiration > Date.now()) {
-                reject('A valid cert has already been created for this IP (' + publicIp + ').  If you do not have access to your private key, reach out to support@homegames.io to generate a new one');
-            } else {
+//            if (certInfo.certData && certInfo.certExpiration && certInfo.certExpiration > Date.now()) {
+//                reject('A valid cert has already been created for this IP (' + publicIp + ').  If you do not have access to your private key, reach out to support@homegames.io to generate a new one');
+//            } else {
                 acme.crypto.createPrivateKey().then(key => {
                     const requestId = generateId();
                     acme.crypto.createCsr({
@@ -396,7 +396,7 @@ const requestCert = (publicIp) => new Promise((resolve, reject) => {
                         });
                     });
                 });
-            }
+//            }
         });
     //});
 });
